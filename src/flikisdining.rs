@@ -1,6 +1,7 @@
 // hide dead code warnings
 #![allow(dead_code)]
 
+use crate::env::SCHOOL_KEY;
 use chrono::Datelike;
 use chrono::{DateTime, Utc};
 use http_cache_quickcache::QuickManager;
@@ -9,7 +10,6 @@ use once_cell::sync::Lazy;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use serde::Deserialize;
-use std::env;
 use thiserror::Error;
 
 #[derive(Deserialize, Default, Clone)]
@@ -90,34 +90,22 @@ pub enum FetchError {
     NoLunchToday,
 }
 
-pub async fn fetch_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningMenuItem>, FetchError> {
-    // load the base API path
-    static SCHOOL_KEY: Lazy<String> = Lazy::new(|| {
-        env::var("API_SCHOOL_KEY")
-            .ok()
-            .expect("Expected API_SCHOOL_KEY in the environment")
-    });
+// create the http client
+static CLIENT: Lazy<ClientWithMiddleware> = Lazy::new(|| {
+    ClientBuilder::new(Client::new())
+        .with(Cache(HttpCache {
+            mode: CacheMode::Default,
+            manager: QuickManager::default(),
+            options: HttpCacheOptions::default(),
+        }))
+        .build()
+});
 
-    // create the http client
-    static CLIENT: Lazy<ClientWithMiddleware> = Lazy::new(|| {
-        ClientBuilder::new(Client::new())
-            .with(Cache(HttpCache {
-                mode: CacheMode::Default,
-                manager: QuickManager::default(),
-                options: HttpCacheOptions::default(),
-            }))
-            .build()
-    });
-
-    // get the month, day, and year
-    let month = date.month();
-    let day = date.day();
-    let year = date.year();
-
-    // create the url
+pub async fn fetch_week_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningDay>, FetchError> {
+    // create the URL
     let url = format!(
         "https://{}.api.flikisdining.com/menu/api/weeks/school/kentucky-country-day-school/menu-type/lunch/{}/{}/{}/?format=json",
-        *SCHOOL_KEY, year, month, day
+        *SCHOOL_KEY, date.year(), date.month(), date.day()
     ).to_owned();
 
     println!("Fetching lunch from {}", url);
@@ -130,9 +118,31 @@ pub async fn fetch_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningMenuItem
         .json::<FlikIsDiningResponse>()
         .await?;
 
-    // find today's lunch
-    let today = response
+    // for each day, filter so only food items are left
+    let days = response
         .days
+        .into_iter()
+        .map(|day| {
+            let menu_items = day
+                .menu_items
+                .into_iter()
+                .filter(|item| item.food.is_some())
+                .collect::<Vec<FlikIsDiningMenuItem>>();
+
+            FlikIsDiningDay { menu_items, ..day }
+        })
+        .collect::<Vec<FlikIsDiningDay>>();
+
+    // return the response
+    Ok(days)
+}
+
+pub async fn fetch_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningMenuItem>, FetchError> {
+    // get the week
+    let week = fetch_week_lunch(date).await?;
+
+    // find today's lunch
+    let today = week
         .into_iter()
         .find(|day| day.date == date.format("%Y-%m-%d").to_string());
 
@@ -141,14 +151,6 @@ pub async fn fetch_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningMenuItem
         return Err(FetchError::NoLunchToday);
     }
 
-    // filter out items without FlikIsDiningFood
-    let today = today
-        .unwrap()
-        .menu_items
-        .into_iter()
-        .filter(|item| item.food.is_some())
-        .collect::<Vec<FlikIsDiningMenuItem>>();
-
     // return the response
-    Ok(today)
+    Ok(today.unwrap().menu_items)
 }

@@ -1,9 +1,11 @@
+mod env;
 mod flikisdining;
+mod handler;
 mod lunch;
+mod search;
 
 use serenity::{prelude::GatewayIntents, Client};
-
-use std::env;
+use std::env as std_env;
 
 #[tokio::main]
 async fn main() {
@@ -11,14 +13,16 @@ async fn main() {
     let _ = dotenvy::dotenv();
 
     // get the token
-    let token = env::var("TOKEN").expect("Expected a token in the environment");
+    let token = std_env::var("TOKEN").expect("Expected a token in the environment");
 
     // set the intents
     let intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT;
 
     // create the client
     let mut client = Client::builder(&token, intents)
-        .event_handler(lunch::Handler)
+        // .event_handler(lunch::Handler)
+        // .event_handler(search::Handler)
+        .event_handler(handler::Handler)
         .await
         .expect("Failed to create client");
 
