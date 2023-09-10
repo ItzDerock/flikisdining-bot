@@ -3,12 +3,16 @@
 
 use chrono::Datelike;
 use chrono::{DateTime, Utc};
+use http_cache_quickcache::QuickManager;
+use http_cache_reqwest::{Cache, CacheMode, HttpCache, HttpCacheOptions};
 use once_cell::sync::Lazy;
+use reqwest::Client;
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use serde::Deserialize;
-use serenity::Error;
 use std::env;
+use thiserror::Error;
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 pub struct FlikIsDiningNutritionInfo {
     pub calories: Option<f32>,
     pub raw_calories: Option<f32>,
@@ -29,13 +33,13 @@ pub struct FlikIsDiningNutritionInfo {
     pub mg_vitamin_d: Option<f32>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct FlikIsDiningServingSizeInfo {
     pub serving_size_amount: String,
     pub serving_size_unit: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct FlikIsDiningFood {
     pub id: f32,
     pub name: String,
@@ -45,7 +49,7 @@ pub struct FlikIsDiningFood {
     pub serving_size_info: Option<FlikIsDiningServingSizeInfo>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct FlikIsDiningMenuItem {
     pub position: f32,
     pub bold: bool,
@@ -56,7 +60,7 @@ pub struct FlikIsDiningMenuItem {
     pub food: Option<FlikIsDiningFood>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct FlikIsDiningDay {
     /// yyyy-mm-dd
     pub date: String,
@@ -65,7 +69,7 @@ pub struct FlikIsDiningDay {
     pub menu_items: Vec<FlikIsDiningMenuItem>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct FlikIsDiningResponse {
     pub start_date: Option<String>,
     pub menu_type_id: Option<f32>,
@@ -74,12 +78,35 @@ pub struct FlikIsDiningResponse {
     pub last_updated: Option<String>,
 }
 
-pub async fn fetch_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningMenuItem>, Error> {
+#[derive(Error, Debug)]
+pub enum FetchError {
+    #[error(transparent)]
+    RequestFailed(#[from] reqwest::Error),
+
+    #[error(transparent)]
+    RequestMiddlewareFailed(#[from] reqwest_middleware::Error),
+
+    #[error("No lunch today")]
+    NoLunchToday,
+}
+
+pub async fn fetch_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningMenuItem>, FetchError> {
     // load the base API path
     static SCHOOL_KEY: Lazy<String> = Lazy::new(|| {
         env::var("API_SCHOOL_KEY")
             .ok()
             .expect("Expected API_SCHOOL_KEY in the environment")
+    });
+
+    // create the http client
+    static CLIENT: Lazy<ClientWithMiddleware> = Lazy::new(|| {
+        ClientBuilder::new(Client::new())
+            .with(Cache(HttpCache {
+                mode: CacheMode::Default,
+                manager: QuickManager::default(),
+                options: HttpCacheOptions::default(),
+            }))
+            .build()
     });
 
     // get the month, day, and year
@@ -96,7 +123,9 @@ pub async fn fetch_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningMenuItem
     println!("Fetching lunch from {}", url);
 
     // fetch the data
-    let response: FlikIsDiningResponse = reqwest::get(&url)
+    let response: FlikIsDiningResponse = CLIENT
+        .get(&url)
+        .send()
         .await?
         .json::<FlikIsDiningResponse>()
         .await?;
@@ -109,7 +138,7 @@ pub async fn fetch_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningMenuItem
 
     // if there was no lunch, return an error
     if today.is_none() {
-        return Err(Error::Other("No lunch today"));
+        return Err(FetchError::NoLunchToday);
     }
 
     // filter out items without FlikIsDiningFood
