@@ -8,8 +8,13 @@ this means you can have fun and be like `yooyoyoyo what is the lunch for today??
 
 You can also add `tmr` or `tomorrow` to see the lunch for tomorrow, and this can be chained. So `tmr tmr` will show the lunch for the day after tomorrow.
 
-example image:
+### example image:
 ![example image](https://derock.media/r/UbYsEe.png)
+
+You can also send `when will we have <something>` and the bot will search the next 3 weeks for any occurences of the food using a fuzzy search. 
+
+### example image:
+![example image](https://derock.media/r/YipYXB.png)
 
 ## notice
 this isn't meant to be a public bot, so it's not very user friendly. this is also one of my first projects in Rust, so there's probably a lot of bad code.
