@@ -1,7 +1,19 @@
 use crate::env::PRIMARY_LUNCH_CHANNEL;
 use crate::flikisdining;
-use chrono::Utc;
+use chrono::{Datelike, Utc};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serenity::{builder::CreateEmbed, model::prelude::Message, prelude::Context};
+
+static WEEKDAYS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    vec![
+        Regex::new(r"monday").unwrap(),
+        Regex::new(r"tues(day)?").unwrap(),
+        Regex::new(r"wed(nesday)?").unwrap(),
+        Regex::new(r"thurs(day)?").unwrap(),
+        Regex::new(r"fri(day)?").unwrap(),
+    ]
+});
 
 pub async fn handle(context: Context, msg: Message) {
     // ignore bots
@@ -28,8 +40,18 @@ pub async fn handle(context: Context, msg: Message) {
         // figure out date
         let mut date = Utc::now();
 
+        // check if a weekday is in the content
+        let mut days: usize = 0;
+        for (i, weekday) in WEEKDAYS.iter().enumerate() {
+            if weekday.is_match(&content) {
+                // set the date
+                days = i - date.weekday().num_days_from_monday() as usize;
+                break;
+            }
+        }
+
         // for each `tmr` or `tomorrow` in the content, add a day
-        let days = content.matches("tmr").count() + content.matches("tomorrow").count();
+        days += content.matches("tmr").count() + content.matches("tomorrow").count();
         date = date + chrono::Duration::days(days as i64);
 
         // debug log the amount of days added
@@ -109,12 +131,10 @@ pub async fn handle(context: Context, msg: Message) {
             .channel_id
             .send_message(&context.http, |m| {
                 m.embed(|e: &mut CreateEmbed| {
-                    e.title(if days == 0 {
-                        "🍖 Today's Lunch".to_owned()
-                    } else if days == 1 {
-                        "🍖 Tomorrow's Lunch".to_owned()
-                    } else {
-                        format!("🍖 Lunch in {} days", days)
+                    e.title(match days {
+                        0 => "🍖 Today's Lunch".to_owned(),
+                        1 => "🍖 Tomorrow's Lunch".to_owned(),
+                        days => format!("🍖 Lunch in {} days", days),
                     })
                     .description(menu_items)
                     .footer(|f| f.text((Utc::now() - start).num_milliseconds().to_string() + " ms"))
