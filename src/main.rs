@@ -20,8 +20,6 @@ async fn main() {
 
     // create the client
     let mut client = Client::builder(&token, intents)
-        // .event_handler(lunch::Handler)
-        // .event_handler(search::Handler)
         .event_handler(handler::Handler)
         .await
         .expect("Failed to create client");
