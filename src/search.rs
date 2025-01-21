@@ -1,12 +1,17 @@
 use crate::env::PRIMARY_LUNCH_CHANNEL;
 use crate::flikisdining;
 use chrono::{DateTime, Utc};
-use serenity::{builder::CreateEmbed, model::prelude::Message, prelude::Context};
+use serenity::{
+    all::{CreateEmbedFooter, CreateMessage},
+    builder::CreateEmbed,
+    model::prelude::Message,
+    prelude::Context,
+};
 use tantivy::{
     doc,
     query::QueryParser,
-    schema::{Field, Schema},
-    Index,
+    schema::{Field, Schema, Value},
+    Index, TantivyDocument,
 };
 use tokio::task::JoinSet;
 
@@ -160,21 +165,26 @@ pub async fn handle(context: Context, msg: Message) {
                     return format!("{}: Error retrieving document", idx);
                 }
 
-                let retrieved_doc = retrieved_doc.unwrap();
+                let retrieved_doc: TantivyDocument = retrieved_doc.unwrap();
 
                 // get the content
-                let content = retrieved_doc.get_first(content).unwrap().as_text().unwrap();
-                let date = retrieved_doc.get_first(date).unwrap().as_text().unwrap();
+                let content = retrieved_doc.get_first(content).unwrap().as_str();
+                let date = retrieved_doc.get_first(date).unwrap().as_str();
+
+                if content.is_none() || date.is_none() {
+                    return format!("{}: Error parsing document", idx);
+                }
 
                 // parse the date (yyyy-mm-dd) and set to midday EST
-                let date = DateTime::parse_from_rfc3339(&(date.to_owned() + "T12:00:00-05:00"))
-                    .unwrap()
-                    .with_timezone(&Utc);
+                let date =
+                    DateTime::parse_from_rfc3339(&(date.unwrap().to_owned() + "T12:00:00-05:00"))
+                        .unwrap()
+                        .with_timezone(&Utc);
 
                 format!(
                     "{}) **{}**\n> <t:{}:F>\n> Score: {}",
                     idx,
-                    content,
+                    content.unwrap(),
                     (date.timestamp_millis() / 1000),
                     score
                 )
@@ -183,15 +193,15 @@ pub async fn handle(context: Context, msg: Message) {
             .join("\n");
 
         // now send the embed
-        let mut embed = CreateEmbed::default();
-        embed.title("🔍 Search Results");
-        embed.description(description);
-        embed.color(0x00FF00);
-        embed.footer(|f| f.text((Utc::now() - start).num_milliseconds().to_string() + " ms"));
+        let embed = CreateEmbed::default()
+            .title("🔍 Search Results")
+            .description(description)
+            .color(0x00FF00)
+            .footer(CreateEmbedFooter::new(
+                (Utc::now() - start).num_milliseconds().to_string() + " ms",
+            ));
 
-        let _ = msg
-            .channel_id
-            .send_message(&context.http, |m| m.set_embed(embed))
-            .await;
+        let message = CreateMessage::new().embed(embed);
+        let _ = msg.channel_id.send_message(&context.http, message).await;
     }
 }

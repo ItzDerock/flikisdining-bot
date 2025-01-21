@@ -3,7 +3,12 @@ use crate::flikisdining;
 use chrono::{Datelike, Utc};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use serenity::{builder::CreateEmbed, model::prelude::Message, prelude::Context};
+use serenity::{
+    all::CreateEmbedFooter,
+    builder::{CreateEmbed, CreateMessage},
+    model::prelude::Message,
+    prelude::Context,
+};
 
 static WEEKDAYS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
@@ -40,19 +45,26 @@ pub async fn handle(context: Context, msg: Message) {
         // figure out date
         let mut date = Utc::now();
 
-        // check if a weekday is in the content
-        let mut days: usize = 0;
+        // if a weekday is mentioned, create an offset from today to that weekday
+        let mut days: i64 = 0;
         for (i, weekday) in WEEKDAYS.iter().enumerate() {
             if weekday.is_match(&content) {
-                // set the date
-                days = i - date.weekday().num_days_from_monday() as usize;
+                days = i64::try_from(i).unwrap();
+                days -= i64::try_from(date.weekday().num_days_from_monday()).unwrap();
                 break;
             }
         }
 
+        // if the days matched is negative, that means it's already passed
+        // offset by 7 days so we get the next week
+        if days < 0 {
+            days += 7;
+        }
+
         // for each `tmr` or `tomorrow` in the content, add a day
-        days += content.matches("tmr").count() + content.matches("tomorrow").count();
-        date = date + chrono::Duration::days(days as i64);
+        days += i64::try_from(content.matches("tmr").count() + content.matches("tomorrow").count())
+            .unwrap();
+        date = date + chrono::Duration::days(days);
 
         // debug log the amount of days added
         if debug {
@@ -129,24 +141,25 @@ pub async fn handle(context: Context, msg: Message) {
         // and try to send the message
         if let Err(why) = msg
             .channel_id
-            .send_message(&context.http, |m| {
-                m.embed(|e: &mut CreateEmbed| {
-                    e.title(match days {
+            .send_message(&context.http, {
+                let mut embed = CreateEmbed::new()
+                    .title(match days {
                         0 => "🍖 Today's Lunch".to_owned(),
                         1 => "🍖 Tomorrow's Lunch".to_owned(),
                         days => format!("🍖 Lunch in {} days", days),
                     })
                     .description(menu_items)
-                    .footer(|f| f.text((Utc::now() - start).num_milliseconds().to_string() + " ms"))
+                    .footer(CreateEmbedFooter::new(
+                        (Utc::now() - start).num_milliseconds().to_string() + " ms",
+                    ))
                     .color(0xEE8B2F)
                     .timestamp(Utc::now());
 
-                    if thumbnail.is_some() {
-                        e.thumbnail(thumbnail.unwrap());
-                    }
+                if thumbnail.is_some() {
+                    embed = embed.thumbnail(thumbnail.unwrap());
+                }
 
-                    e
-                })
+                CreateMessage::new().embed(embed)
             })
             .await
         {
