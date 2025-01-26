@@ -72,7 +72,7 @@ pub async fn handle(context: Context, msg: Message) {
 
         // search the next 3 weeks
         let (index, _schema, content, date) = create_index();
-        let mut index_writer = index.writer(3_000_000).unwrap();
+        let mut index_writer = index.writer(15_000_000).unwrap();
 
         // fetch 3 weeks of lunch
         let mut set = JoinSet::new();
