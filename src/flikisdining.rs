@@ -12,7 +12,7 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use serde::Deserialize;
 use thiserror::Error;
 
-#[derive(Deserialize, Default, Clone)]
+#[derive(Deserialize, Default, Clone, Debug)]
 pub struct FlikIsDiningNutritionInfo {
     pub calories: Option<f32>,
     pub raw_calories: Option<f32>,
@@ -31,51 +31,57 @@ pub struct FlikIsDiningNutritionInfo {
     pub iu_vitamin_a: Option<f32>,
     pub re_vitamin_a: Option<f32>,
     pub mg_vitamin_d: Option<f32>,
+    pub mg_potassium: Option<f32>,
+    pub g_fiber: Option<f32>,
+    pub mcg_vitamin_a: Option<f32>,
+    pub mcg_vitamin_d: Option<f32>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct FlikIsDiningServingSizeInfo {
     pub serving_size_amount: String,
     pub serving_size_unit: String,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct FlikIsDiningFood {
     pub id: f32,
     pub name: String,
     pub ingredients: Option<String>,
-
+    // pub description: Option<String>,
+    // pub synced_ingredients: Option<String>,
     pub rounded_nutrition_info: Option<FlikIsDiningNutritionInfo>,
     pub serving_size_info: Option<FlikIsDiningServingSizeInfo>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct FlikIsDiningMenuItem {
+    pub id: f32,
     pub position: f32,
     pub bold: bool,
     pub text: String,
     pub image: Option<String>,
     pub image_thumbnail: Option<String>,
-
     pub food: Option<FlikIsDiningFood>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct FlikIsDiningDay {
     /// yyyy-mm-dd
     pub date: String,
     pub has_unpublished_menus: bool,
-    // menu_info: Option<serde::Value>,
+    pub menu_info: Option<serde_json::Value>,
     pub menu_items: Vec<FlikIsDiningMenuItem>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct FlikIsDiningResponse {
     pub start_date: Option<String>,
     pub menu_type_id: Option<f32>,
-
     pub days: Vec<FlikIsDiningDay>,
     pub last_updated: Option<String>,
+    pub id: Option<f32>,
+    pub bold_all_entrees_enabled: Option<bool>,
 }
 
 #[derive(Error, Debug)]
@@ -86,8 +92,17 @@ pub enum FetchError {
     #[error(transparent)]
     RequestMiddlewareFailed(#[from] reqwest_middleware::Error),
 
-    #[error("No lunch today")]
-    NoLunchToday,
+    #[error("JSON Parsing failed: {0}")]
+    JsonParseFailed(#[from] serde_json::Error),
+
+    #[error("Response body read failed: {0}")]
+    BodyReadFailed(reqwest::Error),
+
+    #[error("No lunch found for date {0}")]
+    NoLunchForDate(String),
+
+    #[error("Received non-success status code: {0}")]
+    HttpStatusError(reqwest::StatusCode),
 }
 
 // create the http client
@@ -106,20 +121,36 @@ pub async fn fetch_week_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningDay
     let url = format!(
         "https://{}.api.flikisdining.com/menu/api/weeks/school/kentucky-country-day-school/menu-type/lunch/{}/{}/{}/?format=json",
         *SCHOOL_KEY, date.year(), date.month(), date.day()
-    ).to_owned();
+    );
 
     println!("Fetching lunch from {}", url);
 
     // fetch the data
-    let response: FlikIsDiningResponse = CLIENT
-        .get(&url)
-        .send()
-        .await?
-        .json::<FlikIsDiningResponse>()
-        .await?;
+    let response = CLIENT.get(&url).send().await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        eprintln!(
+            "Request failed with status: {}. Response text: {:?}",
+            status,
+            response.text().await.ok()
+        );
+        return Err(FetchError::HttpStatusError(status));
+    }
+
+    // read body as text
+    let response_text = response.text().await.map_err(FetchError::BodyReadFailed)?;
+
+    // Attempt to parse the text
+    let response_data: FlikIsDiningResponse =
+        serde_json::from_str(&response_text).map_err(|e| {
+            eprintln!("Failed to parse JSON: {}", e);
+            eprintln!("Response Text was:\n{}", response_text);
+            FetchError::JsonParseFailed(e)
+        })?;
 
     // for each day, filter so only food items are left
-    let days = response
+    let days = response_data
         .days
         .into_iter()
         .map(|day| {
@@ -141,16 +172,14 @@ pub async fn fetch_lunch(date: DateTime<Utc>) -> Result<Vec<FlikIsDiningMenuItem
     // get the week
     let week = fetch_week_lunch(date).await?;
 
+    let date_str = date.format("%Y-%m-%d").to_string();
+
     // find today's lunch
-    let today = week
-        .into_iter()
-        .find(|day| day.date == date.format("%Y-%m-%d").to_string());
+    let today = week.into_iter().find(|day| day.date == date_str);
 
     // if there was no lunch, return an error
-    if today.is_none() {
-        return Err(FetchError::NoLunchToday);
+    match today {
+        Some(day) => Ok(day.menu_items),
+        None => Err(FetchError::NoLunchForDate(date_str)),
     }
-
-    // return the response
-    Ok(today.unwrap().menu_items)
 }
