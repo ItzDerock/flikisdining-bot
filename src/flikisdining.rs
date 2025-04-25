@@ -56,7 +56,7 @@ pub struct FlikIsDiningFood {
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct FlikIsDiningMenuItem {
-    pub id: f32,
+    pub id: Option<f32>,
     pub position: f32,
     pub bold: bool,
     pub text: String,
